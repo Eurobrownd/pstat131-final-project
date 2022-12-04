@@ -1,0 +1,14 @@
+---
+title: "pstat131Final"
+author: "Simon Lee"
+date: "2022-11-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+```
