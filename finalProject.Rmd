@@ -9,7 +9,126 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r message = FALSE}
+library(tidymodels)
+library(tidyverse)
+library(ggplot2)
+library(corrr)
+library(corrplot)
+library(klaR)
+library(glmnet)
+library(MASS)
+library(discrim)
+library(poissonreg)
+library(janitor)
+library(rpart.plot)
+library(vip)
+library(randomForest)
+library(xgboost)
+library(recipes)
+library(dplyr)
+tidymodels_prefer()
+```
+
+The goal of this project is to build different models that predict whether or not a certain certain mushroom is edible or
+poisonous. 
+
 ```{r}
 rawData <- read.csv("mushrooms.csv")
-
+dim(rawData)
 ```
+There is 8124 observations and 23 variables for each of the observations.
+
+Lets also check how many levels for each categorical variable we have. So we would have a better idea when we turn them into
+factors the unique values given to each variable
+
+```{r}
+# map_df function from dplyr package in order to make each variable a factor. 
+mushroom <- rawData %>% map_df(function(.x) as.factor(.x))
+
+# The function is used to calculate the amount of levels(or categories) each variable has
+levelCount <- function(x){
+  x <- length(levels(x))
+}
+
+x <- mushroom %>%  map_dbl(function(.x) levelCount(.x))  %>%  as_tibble()  %>%  
+       rownames_to_column()  %>%  arrange(desc(value))
+colnames(x) <- c("Variable #", "Number of levels")
+print(x)
+```
+As we can see with all the different variables, the amount of levels within each variable ranges
+from 1-12. Noticing that variable 17, (veil_type) has only one level, which means that all of the
+observations have the same value for that variable. With only one factor, it does not help us in determining
+the edibility of a mushroom and will be removed from the data.
+
+```{r}
+mushroom <- mushroom %>% select(- veil.type)
+```
+
+At this point, it might also be good to check whether or not our data has missing values
+```{r}
+colSums(is.na(mushroom)) / nrow(mushroom)
+```
+
+Luckily for us. This data set found on kaggle does not have any missing values.
+
+Let's take a look at the distribution of edible mushroom to poisonous in our dataset
+```{r}
+mushroom %>% ggplot(aes(x= class)) + geom_bar()
+```
+
+Before visualizing some of the data with ggplot, let's make the data prettier looking. And by that I mean
+changing the variable names and level names to make them easier to understand.
+
+```{r}
+colnames(mushroom) <- c("edibility", "cap_shape", "cap_surface", "cap_color", "bruises", "odor", "gill_attachment",
+                        "gill_spacing", "gill_size", "gill_color", "stalk_shape", "stalk_root", "stalk_surface_above_ring",
+                        "stalk_surface_below_ring", "stalk_color_above_ring", "stalk_color_below_ring", "veil_color",
+                        "ring_number", "ring_type", "spore_print_color", "population", "habitat")
+levels(mushroom$edibility) <- c("edible", "poisonous")
+levels(mushroom$cap_shape) <- c("bell", "conical", "flat", "knobbed", "sunken", "convex")
+levels(mushroom$cap_surface) <- c("fibrous", "grooves", "scaly", "smooth")
+levels(mushroom$cap_color) <- c("buff", "cinnamon", "red", "gray", "brown", "pink", "green", "purple", "white", "yellow")
+levels(mushroom$bruises) <- c("no", "yes")
+levels(mushroom$odor) <- c("almond", "creosote", "foul", "anise", "musty", "none", "pungent", "spicy", "fishy")
+levels(mushroom$gill_attachment) <- c("attched", "free")
+levels(mushroom$gill_spacing) <- c("close", "crowded")
+levels(mushroom$gill_size) <- c("broad", "narrow")
+levels(mushroom$gill_color) <- c("buff", "red", "gray", "chocolate", "black", "brown", "orange", "pink", "green",
+                                 "purple", "white", "yellow")
+levels(mushroom$stalk_shape) <- c("enlarging", "tapering")
+levels(mushroom$stalk_root) <- c("missing", "bulbous", "club", "equal", "rooted")
+levels(mushroom$stalk_surface_above_ring) <- c("fibrous", "silky", "smooth", "scaly")
+levels(mushroom$stalk_surface_below_ring) <- c("fibrous", "silky", "smooth", "scaly")
+levels(mushroom$stalk_color_above_ring) <- c("buff", "cinnamon", "red", "gray", "brown", "orange", "pink",
+                                             "white", "yellow")
+levels(mushroom$stalk_color_below_ring) <- c("buff", "cinnamon", "red", "gray", "brown", "orange", "pink",
+                                             "white", "yellow")
+levels(mushroom$veil_color) <- c("brown", "orange", "white", "yellow")
+levels(mushroom$ring_number) <- c("none", "one", "two")
+levels(mushroom$ring_type) <- c("evanescent", "flaring", "large", "none", "pendant")
+levels(mushroom$spore_print_color) <- c("buff", "chocolate", "black", "brown", "orange", "green", "purple",
+                                        "white", "yellow")
+levels(mushroom$population) <- c("abundant", "clustered", "numerous", "scattered", "several", "solitary")
+levels(mushroom$habitat) <- c("wood", "grasses", "leaves", "meadows", "paths", "urban", "waste")
+```
+
+
+Now lets use ggplot to see a general idea of which variables might be useful in predicting the edibility of a mushroom
+
+The variables that I'm interested in testing is all of the color variables in the data set. This is due to the general assumption
+that as a survival tactic, you shouldn't eat bright colored things in nature. The term used is aposematism where it is the
+trait of an organism which advertises to its preadators to not attack or eat it. So I'm going to make bar charts of all the
+color variables and see the ratio of edible vs poisonous mushroom within each color
+
+```{r}
+ggplot(data = mushroom, aes(x = cap_color, fill = edibility)) + geom_bar()
+ggplot(data = mushroom, aes(x = gill_color, fill = edibility)) + geom_bar()
+ggplot(data = mushroom, aes(x = stalk_color_above_ring, fill = edibility)) + geom_bar()
+ggplot(data = mushroom, aes(x = stalk_color_below_ring, fill = edibility)) + geom_bar()
+ggplot(data = mushroom, aes(x = veil_color, fill = edibility)) + geom_bar()
+```
+
+Looking at the four different bar charts. It seems that the color of the cap of the mushroom doesn't contribute too much to
+whether or not the mushroom is edible or not. Within each cap_color, there are edible and poisonous except for green and purple which suggests that its edible. However the count size is too small to conclude anything. More interestingly in the second bar graph, if the mushroom has a buff gill_color, then it is poisonous. 
+
