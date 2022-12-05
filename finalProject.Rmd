@@ -1,7 +1,7 @@
 ---
-title: "pstat131Final"
+title: "Is the mushroom good to eat?"
 author: "Simon Lee"
-date: "2022-11-04"
+date: "UCSB Fall 2022"
 output: html_document
 ---
 
@@ -9,6 +9,12 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Mushroom Classification
+
+
+## Introduction
+The goal of this project is to build different models that predict whether or not a certain certain mushroom is edible or
+poisonous. 
 ```{r message = FALSE}
 library(tidymodels)
 library(tidyverse)
@@ -30,10 +36,9 @@ library(dplyr)
 tidymodels_prefer()
 ```
 
-The goal of this project is to build different models that predict whether or not a certain certain mushroom is edible or
-poisonous. 
 
 ```{r}
+# reading in the data
 rawData <- read.csv("mushrooms.csv")
 dim(rawData)
 ```
@@ -77,6 +82,11 @@ Let's take a look at the distribution of edible mushroom to poisonous in our dat
 mushroom %>% ggplot(aes(x= class)) + geom_bar()
 ```
 
+The ratio of poisnous to edible mushrooms in the dataset is around the same. With there being slightly more
+edible mushrooms than poisonous ones.
+
+## Data Cleaning
+
 Before visualizing some of the data with ggplot, let's make the data prettier looking. And by that I mean
 changing the variable names and level names to make them easier to understand.
 
@@ -114,21 +124,108 @@ levels(mushroom$habitat) <- c("wood", "grasses", "leaves", "meadows", "paths", "
 ```
 
 
+## EDA
+
 Now lets use ggplot to see a general idea of which variables might be useful in predicting the edibility of a mushroom
 
-The variables that I'm interested in testing is all of the color variables in the data set. This is due to the general assumption
-that as a survival tactic, you shouldn't eat bright colored things in nature. The term used is aposematism where it is the
-trait of an organism which advertises to its preadators to not attack or eat it. So I'm going to make bar charts of all the
-color variables and see the ratio of edible vs poisonous mushroom within each color
+The variables that I'm interested in visualizing is all of the color variables in the data set. This is due to the general assumption that as a survival tactic, you shouldn't eat bright colored things in nature. The term used is aposematism where it is the trait of an organism which advertises to its predators to not attack or eat it. So I'm going to make bar charts of all the
+color variables and see the ratio of edible vs poisonous mushroom within each color. That way I can kind of get a general idea
+of how important each variable is to predicting the edibility of the mushroom.
 
-```{r}
+```{r echo = FALSE}
 ggplot(data = mushroom, aes(x = cap_color, fill = edibility)) + geom_bar()
 ggplot(data = mushroom, aes(x = gill_color, fill = edibility)) + geom_bar()
 ggplot(data = mushroom, aes(x = stalk_color_above_ring, fill = edibility)) + geom_bar()
 ggplot(data = mushroom, aes(x = stalk_color_below_ring, fill = edibility)) + geom_bar()
 ggplot(data = mushroom, aes(x = veil_color, fill = edibility)) + geom_bar()
+ggplot(data = mushroom, aes(x = spore_print_color, fill = edibility)) + geom_bar()
 ```
 
 Looking at the four different bar charts. It seems that the color of the cap of the mushroom doesn't contribute too much to
-whether or not the mushroom is edible or not. Within each cap_color, there are edible and poisonous except for green and purple which suggests that its edible. However the count size is too small to conclude anything. More interestingly in the second bar graph, if the mushroom has a buff gill_color, then it is poisonous. 
+whether or not the mushroom is edible or not. Within each cap_color, there are edible and poisonous except for green and purple which suggests that its edible. However the count size is too small to conclude anything. More interestingly in the second bar graph, if the mushroom has a buff gill_color, then it is poisonous. stalk_color_above_ring and stalk_color_below_ring have the
+same distribution which makes sense as the color of the stalk below and above the ring should be the same. From this bar chart,
+notable colors include gray which indicates the mushroom is edible and brown which indicates that the mushroom is poisonous. The
+veil_color does not appear to be helpful for our purpose of determining the edibility of the mushroom. spore_print_color seems
+to be the most useful out of the color attributes in determining the edibility of a mushroom. (buff, black, brown, orange, purple
+yellow) colored spore_print most likely indicates that the mushroom is edible. (chocolate, green, white) colored spore_print indicates that the mushroom is most likely to be poisonous.
 
+
+### Let's also take a look at some correlation between our variables
+
+In order to do that, I will be changing all the categorical variables to numeric except the response variable, edibility.
+```{r}
+mushroom_num <- mushroom %>% map_df(function(.x) as.numeric(.x))
+mushroom_num <- mushroom_num %>% select(-edibility)
+mushroom_cor <- cor(mushroom_num)
+mushroom_corplot <- corrplot(mushroom_cor, order = "AOE", type = "lower", tl.cex = 0.7)
+```
+
+From the correlation plot, we can see that not many of our variables correlate with each other. This makes sense as its a data set of mostly categorical variables. Which even after being turned numeric values wouldn't make any sense in correlation. Which means that most of them don't interact with one another which will make the recipe step much easier. Though a thing to keep an
+eye out for would be the variables ring_number, bruises, gill_size, and stalk_shape. ring_number is originally a numerical variable and gill_size/stalk_shape have only 2 levels so after changing them to numbers they could still be used in correlation.
+
+Let's take a look at the interaction between these 3 variables
+```{r}
+mushroom_cor1 <- mushroom_num %>% 
+  select(c(ring_number, stalk_shape, gill_size)) %>% 
+  correlate() %>% 
+  stretch() %>% 
+  ggplot(aes(x,y,fill = r)) + geom_tile() + geom_text(aes(label = as.character(fashion(r))))
+mushroom_cor1
+```
+
+There is some very weak positive/negative correlation between these variables. Which could lead me to safely assume
+that there is no interaction between these variables.
+
+## Model Making
+
+It's time to split our data into the training/testing set. Create a recipe. And build different models to predict
+whether or not a mushroom is edible based on its attributes
+
+### Splitting the Data
+```{r}
+# seed is used to make sure that we can reproduce our data
+set.seed(115)
+
+# Splitting our data into 80% training and 20% testing as well as using our response variable edibility as the strata
+mush_split <- mushroom %>% initial_split(prop = 0.8, strata = edibility)
+mush_train <- training(mush_split)
+mush_test <- testing(mush_split)
+```
+
+Let's quickly check the dimensions of our training/testing set
+```{r}
+dim(mush_train)
+dim(mush_test)
+```
+
+There are 6498 observation in the training data set and 1626 observations in the testing data set
+
+## Recipe Building
+
+Fortunately, using tidymodels means that we only have to create one recipe for use in all of our models. 
+```{r}
+mush_recipe <- recipe(edibility ~ cap_shape + cap_surface + cap_color + bruises + odor + gill_attachment +
+                      gill_spacing + gill_size + gill_color + stalk_shape + stalk_root + stalk_surface_above_ring +
+                      stalk_surface_below_ring + stalk_color_above_ring + stalk_color_below_ring + veil_color +
+                      ring_number + ring_type + spore_print_color + population + habitat, data = mush_train) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  step_center(all_predictors()) %>% 
+  step_scale(all_predictors()) %>% 
+  step_normalize(all_predictors())
+mush_recipe
+```
+
+
+```{r}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+log_wflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(mush_recipe)
+
+log_fit <- fit(log_wflow, mush_train)
+log_fit %>% tidy()
+
+```
