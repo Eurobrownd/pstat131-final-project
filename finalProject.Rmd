@@ -33,6 +33,7 @@ library(randomForest)
 library(xgboost)
 library(recipes)
 library(dplyr)
+library(ranger)
 tidymodels_prefer()
 ```
 
@@ -186,8 +187,13 @@ whether or not a mushroom is edible based on its attributes
 # seed is used to make sure that we can reproduce our data
 set.seed(115)
 
+mush_df <- rawData  %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(-c(bruises, gill.attachment, veil.type))
+
+
 # Splitting our data into 80% training and 20% testing as well as using our response variable edibility as the strata
-mush_split <- mushroom %>% initial_split(prop = 0.8, strata = edibility)
+mush_split <- mush_df %>% initial_split(prop = 0.8, strata = class)
 mush_train <- training(mush_split)
 mush_test <- testing(mush_split)
 ```
@@ -204,15 +210,16 @@ There are 6498 observation in the training data set and 1626 observations in the
 
 Fortunately, using tidymodels means that we only have to create one recipe for use in all of our models. 
 ```{r}
-mush_recipe <- recipe(edibility ~ cap_shape + cap_surface + cap_color + bruises + odor + gill_attachment +
-                      gill_spacing + gill_size + gill_color + stalk_shape + stalk_root + stalk_surface_above_ring +
-                      stalk_surface_below_ring + stalk_color_above_ring + stalk_color_below_ring + veil_color +
-                      ring_number + ring_type + spore_print_color + population + habitat, data = mush_train) %>% 
-  step_dummy(all_nominal(), -all_outcomes()) %>% 
-  step_center(all_predictors()) %>% 
-  step_scale(all_predictors()) %>% 
-  step_normalize(all_predictors())
+mush_recipe <- recipe(class~., data = mush_train) %>% 
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_other(all_predictors(), threshold = 0.05)
 mush_recipe
+
+mush_folds <- vfold_cv(mush_train, v = 10)
+mushrooms_prep <- prep(mush_recipe)
 ```
 
 
@@ -221,11 +228,135 @@ log_reg <- logistic_reg() %>%
   set_engine("glm") %>% 
   set_mode("classification")
 
-log_wflow <- workflow() %>% 
-  add_model(log_reg) %>% 
-  add_recipe(mush_recipe)
+log_wkflow <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(log_reg)
 
-log_fit <- fit(log_wflow, mush_train)
-log_fit %>% tidy()
+lda_mod <- discrim_linear() %>% 
+  set_engine("MASS") %>% 
+  set_mode("classification")
 
+lda_wkflow <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(lda_mod)
+
+qda_mod <- discrim_quad() %>% 
+  set_engine("MASS") %>% 
+  set_mode("classification")
+
+qda_wkflow <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(qda_mod)
 ```
+
+
+```{r}
+log_fit <- fit_resamples(log_wkflow, mush_folds)
+lda_fit <- fit_resamples(resamples = mush_folds, lda_wkflow)
+```
+
+
+```{r}
+collect_metrics(log_fit)
+collect_metrics(lda_fit)
+```
+
+```{r}
+lda_fit_train <- fit(log_wkflow, mush_train)
+lda_test <- fit(lda_wkflow, mush_test)
+
+predict(lda_test, new_data = mush_test, type = "class") %>% 
+  bind_cols(mush_test %>% select(class)) %>% 
+  accuracy(truth = class, estimate = .pred_class)
+```
+
+
+```{r}
+mush_spec <- decision_tree(cost_complexity = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("rpart")
+
+mush_tree_wf <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(mush_spec)
+
+param_grid_tree <- grid_regular(cost_complexity(range = c(-3,-1)), levels = 10)
+
+tune_res_tree <- tune_grid(mush_tree_wf, resamples = mush_folds, grid = param_grid_tree, metrics = metric_set(roc_auc))
+```
+
+```{r}
+autoplot(tune_res_tree)
+```
+
+```{r}
+collect_metrics(tune_res_tree) %>% arrange(desc(mean))
+best_parameter_tree <- select_best(tune_res_tree, metric = "roc_auc")
+best_parameter_tree
+```
+
+```{r}
+mush_tree_final <- finalize_workflow(mush_tree_wf, best_parameter_tree)
+mush_tree_fit <- fit(mush_tree_final, data = mush_train)
+mush_tree_fit %>%  extract_fit_engine %>% rpart.plot(roundint = FALSE)
+```
+
+```{r}
+mush_rf_spec <- rand_forest(mtry= tune(), trees = tune(), min_n = tune()) %>% 
+  set_engine("randomForest", importance = TRUE) %>% 
+  set_mode("classification")
+
+mush_rf_wf <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(mush_rf_spec)
+```
+
+```{r}
+param_grid_rf <- grid_regular(mtry(range = c(1,19)),
+                              trees(range = c(1,10)),
+                              min_n(range = c(1,10)),
+                              levels = 8)
+param_grid_rf
+```
+
+```{r}
+tune_res_rf <- tune_grid(mush_rf_wf, resamples = mush_folds, grid = param_grid_rf, metrics = metric_set(roc_auc))
+```
+
+```{r}
+autoplot(tune_res_rf)
+```
+
+```{r}
+load(file = "tune_res_rf.rda")
+```
+
+
+```{r}
+collect_metrics(tune_res_rf) %>% arrange(desc(mean))
+best_parameter_rf <- select_best(tune_res_rf, metric = "roc_auc")
+best_parameter_rf
+```
+
+```{r}
+mush_rf_final <- finalize_workflow(mush_rf_wf, best_parameter_rf)
+mush_rf_final_fit <- fit(mush_rf_final, data = mush_train)
+```
+
+```{r}
+mush_rf_final_fit %>% extract_fit_engine() %>% vip()
+```
+
+```{r}
+mush_boosted_spec <- boost_tree(trees = tune()) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+mush_boosted_wf <- workflow() %>% 
+  add_recipe(mush_recipe) %>% 
+  add_model(mush_boosted_spec)
+
+param_grid_boosted <- grid_regular(trees(range = c(10,2000)), levels = 10)
+tune_res_boosted <- tune_grid(mush_boosted_wf, resamples = mush_folds, grid = param_grid_boosted, metrics = metric_set(roc_auc))
+```
+
