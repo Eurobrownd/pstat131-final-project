@@ -262,7 +262,7 @@ lda_fit <- fit_resamples(resamples = mush_folds, lda_wkflow)
 ```
 
 
-```{r echo = FALSE}
+```{r}
 log_me <- collect_metrics(log_fit)
 lda_me <- collect_metrics(lda_fit)
 ```
@@ -409,7 +409,7 @@ mush_boosted_wf <- workflow() %>%
 param_grid_boosted <- grid_regular(trees(range = c(10,2000)), levels = 10)
 ```
 
-```{r echo=FALSE eval= FALSE}
+```{r eval= FALSE}
 tune_res_boosted <- tune_grid(mush_boosted_wf, resamples = mush_folds, grid = param_grid_boosted, metrics = metric_set(roc_auc))
 ```
 
@@ -518,10 +518,9 @@ mush_tree_wf1 <- workflow() %>%
   add_model(mush_spec)
 ```
 
-```{r echo=FALSE eval = FALSE}
+```{r eval= FALSE}
 tune_res_tree1 <- tune_grid(mush_tree_wf1, resamples = mush_folds, grid = param_grid_tree, metrics = metric_set(roc_auc))
 ```
-
 
 ```{r}
 load("tune_res_tree1.rda")
