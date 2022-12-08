@@ -238,18 +238,10 @@ lda_mod <- discrim_linear() %>%
 lda_wkflow <- workflow() %>% 
   add_recipe(mush_recipe) %>% 
   add_model(lda_mod)
-
-qda_mod <- discrim_quad() %>% 
-  set_engine("MASS") %>% 
-  set_mode("classification")
-
-qda_wkflow <- workflow() %>% 
-  add_recipe(mush_recipe) %>% 
-  add_model(qda_mod)
 ```
 
 
-```{r}
+```{r error=FALSE, warning=FALSE}
 log_fit <- fit_resamples(log_wkflow, mush_folds)
 lda_fit <- fit_resamples(resamples = mush_folds, lda_wkflow)
 ```
@@ -270,7 +262,7 @@ predict(lda_test, new_data = mush_test, type = "class") %>%
 ```
 
 
-```{r}
+```{r include= FALSE}
 mush_spec <- decision_tree(cost_complexity = tune()) %>% 
   set_mode("classification") %>% 
   set_engine("rpart")
@@ -318,16 +310,13 @@ param_grid_rf <- grid_regular(mtry(range = c(1,19)),
 param_grid_rf
 ```
 
-```{r}
+```{r include= FALSE}
 tune_res_rf <- tune_grid(mush_rf_wf, resamples = mush_folds, grid = param_grid_rf, metrics = metric_set(roc_auc))
 ```
 
 ```{r}
-autoplot(tune_res_rf)
-```
-
-```{r}
 load(file = "tune_res_rf.rda")
+autoplot(tune_res_rf)
 ```
 
 
@@ -346,7 +335,7 @@ mush_rf_final_fit <- fit(mush_rf_final, data = mush_train)
 mush_rf_final_fit %>% extract_fit_engine() %>% vip()
 ```
 
-```{r}
+```{r include= FALSE}
 mush_boosted_spec <- boost_tree(trees = tune()) %>% 
   set_engine("xgboost") %>% 
   set_mode("classification")
