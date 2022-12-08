@@ -6,16 +6,16 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 # Mushroom Classification
-
+For the project, I was looking through data from kaggle and stumbled across this mushroom dataset. What got me interested is the fact that all of the predictive variables that will be used to predict the edibility of a mushroom are categorical. With my previous experience before taking this class, it seemed to be a challenge to predict an outcome on only categorical variables. Since I've only worked with mostly logistic regression in my previous experience. So that's why I wanted to use what I've learned in this class to build an effective model with the mushroom dataset.
 
 ## Introduction
 The goal of this project is to build different models that predict whether or not a certain certain mushroom is edible or
 poisonous. 
-```{r message = FALSE}
+```{r include = FALSE}
 library(tidymodels)
 library(tidyverse)
 library(ggplot2)
@@ -67,19 +67,19 @@ from 1-12. Noticing that variable 17, (veil_type) has only one level, which mean
 observations have the same value for that variable. With only one factor, it does not help us in determining
 the edibility of a mushroom and will be removed from the data.
 
-```{r}
+```{r echo=FALSE}
 mushroom <- mushroom %>% select(- veil.type)
 ```
 
 At this point, it might also be good to check whether or not our data has missing values
-```{r}
+```{r echo=FALSE}
 colSums(is.na(mushroom)) / nrow(mushroom)
 ```
 
 Luckily for us. This data set found on kaggle does not have any missing values.
 
 Let's take a look at the distribution of edible mushroom to poisonous in our dataset
-```{r}
+```{r echo=FALSE}
 mushroom %>% ggplot(aes(x= class)) + geom_bar()
 ```
 
@@ -142,7 +142,7 @@ ggplot(data = mushroom, aes(x = veil_color, fill = edibility)) + geom_bar()
 ggplot(data = mushroom, aes(x = spore_print_color, fill = edibility)) + geom_bar()
 ```
 
-Looking at the four different bar charts. It seems that the color of the cap of the mushroom doesn't contribute too much to
+Looking at the six different bar charts. It seems that the color of the cap of the mushroom doesn't contribute too much to
 whether or not the mushroom is edible or not. Within each cap_color, there are edible and poisonous except for green and purple which suggests that its edible. However the count size is too small to conclude anything. More interestingly in the second bar graph, if the mushroom has a buff gill_color, then it is poisonous. stalk_color_above_ring and stalk_color_below_ring have the
 same distribution which makes sense as the color of the stalk below and above the ring should be the same. From this bar chart,
 notable colors include gray which indicates the mushroom is edible and brown which indicates that the mushroom is poisonous. The
@@ -206,10 +206,12 @@ dim(mush_test)
 
 There are 6498 observation in the training data set and 1626 observations in the testing data set
 
-## Recipe Building
+## Recipe Building/K-Fold Cross Validation
 
-Fortunately, using tidymodels means that we only have to create one recipe for use in all of our models. 
+Fortunately, using tidymodels means that we only have to create one recipe for use in all of our models. We will
+also set up the k-fold cross validation in this step as well.
 ```{r}
+# creating the recipe
 mush_recipe <- recipe(class~., data = mush_train) %>% 
   step_novel(all_nominal_predictors()) %>% 
   step_dummy(all_nominal_predictors()) %>% 
@@ -217,12 +219,24 @@ mush_recipe <- recipe(class~., data = mush_train) %>%
   step_normalize(all_predictors())
 mush_recipe
 
-mush_folds <- vfold_cv(mush_train, v = 10)
+# validation folds
+mush_folds <- vfold_cv(mush_train, v = 10, strata = class)
 mushrooms_prep <- prep(mush_recipe)
 ```
 
+In the recipe, we used 19 of the available 22 available predictive variables since some of the predictive variables
+wouldn't prove to help in the predicting of our outcome variable. Since all of our predictive variables are categorical,
+they will be turned into dummy variables. then all the variables are standardized. Stratified cross validation is used here
+with 10 folds to help with over-fitting and the imbalance in the data.
 
-```{r}
+
+## Model Building
+
+Time to train our models. Some of the models that we will be using in this project is log_reg, lda_mod, decision_tree,
+random_forest, and boosted trees. To start off, we create a model by setting an engine and mode. For logistic regression 
+and lda, we just need to set up the workflow, add the model, and then add in the recipe. Then we will fit the model
+to the dataset and then collect metrics for the model. roc_auc will be used to measure the model performances.
+```{r echo= FALSE}
 log_reg <- logistic_reg() %>% 
   set_engine("glm") %>% 
   set_mode("classification")
@@ -241,17 +255,23 @@ lda_wkflow <- workflow() %>%
 ```
 
 
-```{r error=FALSE, warning=FALSE}
+```{r include= FALSE}
+# not included in html but this is where the sample is fitted.
 log_fit <- fit_resamples(log_wkflow, mush_folds)
 lda_fit <- fit_resamples(resamples = mush_folds, lda_wkflow)
 ```
 
 
 ```{r}
-collect_metrics(log_fit)
-collect_metrics(lda_fit)
+log_me <- collect_metrics(log_fit)
+lda_me <- collect_metrics(lda_fit)
+log_me
+lda_me
 ```
+Seems like both our logistic regression model and Lda model did very well on our training data. With logistic regression getting
+a perfect roc_auc score and lda getting very close to one as well. 
 
+Let's run a lda test on our testing data to see how it does...
 ```{r}
 lda_fit_train <- fit(log_wkflow, mush_train)
 lda_test <- fit(lda_wkflow, mush_test)
@@ -260,9 +280,15 @@ predict(lda_test, new_data = mush_test, type = "class") %>%
   bind_cols(mush_test %>% select(class)) %>% 
   accuracy(truth = class, estimate = .pred_class)
 ```
+As expected, it worked very well on the testing data as well with an accuracy of 99%.
 
+## Slightly more complicated models
 
-```{r include= FALSE}
+We will now make a decision tree model, a random forest model, and a boosted tree model. Just like our two previous models log_reg and lda, we will be using the same recipe. The difference here being that in these more complicated models, we need to set up a tuning grid with the parameters that we want tuned as well as the different levels we want to tune as well. Then we need to tune our models with the grid.
+
+### Decision Tree
+Let's start with making a decision tree. 
+```{r}
 mush_spec <- decision_tree(cost_complexity = tune()) %>% 
   set_mode("classification") %>% 
   set_engine("rpart")
@@ -272,13 +298,19 @@ mush_tree_wf <- workflow() %>%
   add_model(mush_spec)
 
 param_grid_tree <- grid_regular(cost_complexity(range = c(-3,-1)), levels = 10)
+```
 
+
+```{r eval= FALSE}
 tune_res_tree <- tune_grid(mush_tree_wf, resamples = mush_folds, grid = param_grid_tree, metrics = metric_set(roc_auc))
 ```
 
 ```{r}
+load("tune_res_tree.rda")
 autoplot(tune_res_tree)
 ```
+
+As the cost-complexity increases the overall roc_auc goes down
 
 ```{r}
 collect_metrics(tune_res_tree) %>% arrange(desc(mean))
@@ -286,12 +318,26 @@ best_parameter_tree <- select_best(tune_res_tree, metric = "roc_auc")
 best_parameter_tree
 ```
 
+The best performing decision tree was 0.9996 and it had a cost complexity of 0.001. So let's store that as
+best_parameter_tree.
+
+Now let's visualize the decision tree based on our best performing decision tree.
 ```{r}
 mush_tree_final <- finalize_workflow(mush_tree_wf, best_parameter_tree)
 mush_tree_fit <- fit(mush_tree_final, data = mush_train)
 mush_tree_fit %>%  extract_fit_engine %>% rpart.plot(roundint = FALSE)
 ```
 
+If we look towards the bottom of the decision tree, it seems that the model is able to pretty much accurately able to predict
+the edibility of a mushroom after not many decisions through the predictive variables. And we can get a general idea of which
+predictive variables might be more significant in predicting our outcome variable. A few that keeps popping up is odor,
+spore_print_color, stalk_root, gill_size...
+
+
+### Random Forest
+
+probably the model that took the longest to build. We will be making a random forest model. A random forest model chooses mtry
+number of predictors that would be randomly sampled to give to the trees to make decisions. mtry is the number of randomly selected variables each tree is given. trees represents the number of trees in the forest. min_n is the minimum # of data points in each node that are required for further splitting
 ```{r}
 mush_rf_spec <- rand_forest(mtry= tune(), trees = tune(), min_n = tune()) %>% 
   set_engine("randomForest", importance = TRUE) %>% 
@@ -302,6 +348,7 @@ mush_rf_wf <- workflow() %>%
   add_model(mush_rf_spec)
 ```
 
+We will be using mtry from 1-18 since we have 19 predictors, otherwise we would be using predictors that aren't available
 ```{r}
 param_grid_rf <- grid_regular(mtry(range = c(1,19)),
                               trees(range = c(1,10)),
@@ -310,15 +357,18 @@ param_grid_rf <- grid_regular(mtry(range = c(1,19)),
 param_grid_rf
 ```
 
-```{r include= FALSE}
+```{r eval=FALSE}
 tune_res_rf <- tune_grid(mush_rf_wf, resamples = mush_folds, grid = param_grid_rf, metrics = metric_set(roc_auc))
 ```
 
+
 ```{r}
-load(file = "tune_res_rf.rda")
+load("tune_res_rf.rda")
 autoplot(tune_res_rf)
 ```
 
+Through all the random forest models, they all tend to do way better with more predictors. And the best performing models
+tend to have more trees as well. Increasing the number of trees and randomly selected predictors increases our auc_auc score.
 
 ```{r}
 collect_metrics(tune_res_rf) %>% arrange(desc(mean))
@@ -326,16 +376,23 @@ best_parameter_rf <- select_best(tune_res_rf, metric = "roc_auc")
 best_parameter_rf
 ```
 
+Since many of our random forest models had a mean of 1 and a std.err of 0, I just let the computer decide the best model and that
+turned out to be the model with (mtry = 18, trees = 10, and min_n = 1)
+
 ```{r}
 mush_rf_final <- finalize_workflow(mush_rf_wf, best_parameter_rf)
 mush_rf_final_fit <- fit(mush_rf_final, data = mush_train)
 ```
 
-```{r}
+```{r eval= FALSE}
 mush_rf_final_fit %>% extract_fit_engine() %>% vip()
 ```
+With that we can also take a look at which variables contributed the most in predicting our outcome variable. Seems that like we have seen from the decision tree model from earlier, odor, spore_print_color, and gill_size are all important predictors.
 
-```{r include= FALSE}
+### Boosted Tree
+
+We will now train a boosted tree model with trees ranging from 10-2000 and 10 levels.
+```{r}
 mush_boosted_spec <- boost_tree(trees = tune()) %>% 
   set_engine("xgboost") %>% 
   set_mode("classification")
@@ -345,27 +402,47 @@ mush_boosted_wf <- workflow() %>%
   add_model(mush_boosted_spec)
 
 param_grid_boosted <- grid_regular(trees(range = c(10,2000)), levels = 10)
+```
+```{r}
 tune_res_boosted <- tune_grid(mush_boosted_wf, resamples = mush_folds, grid = param_grid_boosted, metrics = metric_set(roc_auc))
 ```
+
+```{r}
+load("tune_res_boosted.rda")
+```
+
 
 ```{r}
 autoplot(tune_res_boosted)
 collect_metrics(tune_res_boosted) %>% arrange(desc(mean))
 ```
+Though the roc_score is already high with a low number of trees, it eventually reaches 1 at around 250 trees
 
 ```{r}
 best_parameter_boosted <- select_best(tune_res_boosted, metric = "roc_auc")
 best_parameter_boosted
 ```
+231 had the highest roc_auc score while the lowest score is at 10 trees
 
+
+## Model Comparisons
+
+For comparing our models, we will be using the roc_score from collect_metrics for our models. 
 ```{r}
 tree_auc <- collect_metrics(tune_res_tree) %>% arrange(desc(mean))
 forest_auc <- collect_metrics(tune_res_rf) %>% arrange(desc(mean))
 boosted_auc <- collect_metrics(tune_res_boosted) %>% arrange(desc(mean))
-roc_aucs <- c(tree_auc$mean[1], forest_auc$mean[1], boosted_auc$mean[1])
+roc_aucs <- c(tree_auc$mean[1], forest_auc$mean[1], boosted_auc$mean[1], log_me$mean[1], lda_me$mean[1])
 roc_aucs
 ```
 
+All of our models did very well, three of them had roc_auc scores of 1. Which means that they are perfectly able to predict
+the edibility of a mushroom based on the predictive variables. So I will selected the boosted tree model to run on the test data
+to see how well it does
+
+## Predicting on Testing Data
+
+Here we will be finalizing our workflow to be that of the boosted tree model. Then we will test the model on our testing data which is much smaller than our training data to see how it does.
 ```{r}
 mush_final <- finalize_workflow(mush_boosted_wf, best_parameter_boosted)
 mush_final_fit <- fit(mush_final, data = mush_train)
@@ -373,7 +450,17 @@ testing_roc_auc <- augment(mush_final_fit, new_data = mush_test) %>%
   accuracy(truth = class, estimate = .pred_class)
 testing_roc_auc
 ```
+WoW. Our model is able to completely accurately predict all of the outcome variables from 1626 obervations. Let's visualize that in a roc_curve.
 
+### ROC curve for Boosted Tree Model
+```{r}
+roc_curves <- augment(mush_final_fit, new_data = mush_test) %>%
+  roc_curve(truth = class, estimate =.pred_e)
+roc_curves %>% autoplot()
+```
+As expected from our finalized model with a roc_score of 1. The curve makes a perfect right angle. Now let's take a look at the confusion matrix.
+
+### Confusion Matrix
 ```{r}
 final_model_conf <- augment(mush_final_fit, new_data = mush_test) %>% 
   conf_mat(truth = class, estimate = .pred_class) %>% 
@@ -381,6 +468,56 @@ final_model_conf <- augment(mush_final_fit, new_data = mush_test) %>%
 final_model_conf
 ```
 
+100% accuracy here as well. 842 of the edible mushrooms were predicted as edible and 784 of the poisonous mushrooms were predicted as poisonous.
+
+## Something More..
+
+Since our data is a very popular dataset from kaggle, the predictive variables are very nice and looking through the data some more, some of our predictive variables are completely accurate in predicting the edibility of a mushroom alone without all of the other variables. So what I wanted to test out is if I removed some of the more important predictive variables like odor and spore_print_color, how would that affect the roc_score of our models.
+
+### Recipe and Model Building
+
+In this case, I will be taking out two more variables from our recipe, odor and spore_print_color which I believe are two of the more important variables in the dataset and fit to a decision tree model
+```{r}
+set.seed(115)
+
+mush_df1 <- rawData  %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(-c(bruises, gill.attachment, veil.type, odor, spore.print.color))
 
 
+# Splitting our data into 80% training and 20% testing as well as using our response variable edibility as the strata
+mush_split1 <- mush_df1 %>% initial_split(prop = 0.8, strata = class)
+mush_train1 <- training(mush_split1)
+mush_test1 <- testing(mush_split1)
+```
 
+```{r}
+mush_recipe1 <- recipe(class~., data = mush_train1) %>% 
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors())
+mush_recipe1
+```
+
+```{r}
+mush_tree_wf1 <- workflow() %>% 
+  add_recipe(mush_recipe1) %>% 
+  add_model(mush_spec)
+```
+
+```{r}
+tune_res_tree1 <- tune_grid(mush_tree_wf1, resamples = mush_folds, grid = param_grid_tree, metrics = metric_set(roc_auc))
+```
+
+```{r}
+collect_metrics(tune_res_tree1) %>% arrange(desc(mean))
+best_parameter_tree1 <- select_best(tune_res_tree1, metric = "roc_auc")
+best_parameter_tree1
+```
+
+As we can see with two of the more important predictive variables removed from the recipe, the lowest roc_auc score has gone down
+to 0.9182. Which speaks volumes of how important odor and spore_print_color is to predicting the edibility of the mushroom.
+
+## Conclusion
+Overall, all of our models (logistic regression, lda, decision tree, random forest, boosted tree) were able to predict the edibility of a mushroom very well. This is thanks to to the dataset from kaggle to be very nice in the way that we are able to build models that can 100% identify the edibility of a mushroom. Which is a good thing assuming that those who go shrooming can tell if a mushroom is poisonous just by a few factors. The color of its spore print and if it has a distinct odor. Overall, this was a fun project to work on and I think by working on this project, I was able to connect ideas that I've learned throughout this whole quarter and put it to use in a meaningful way. Next time instead, I would love to use a dataset of both quantitative and qualitative to predict an outcome. Or maybe a dataset that isn't as nicely correlated between the predictive variables and outcome variable like this one.
